@@ -19,6 +19,8 @@ rectangles_output/
 codes_output/
 images_output/
 debug_contours.png
+source/
+images_old/
 
 # System files
 .DS_Store

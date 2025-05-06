@@ -59,23 +59,40 @@ def is_mostly_white(img, threshold=0.98):
 
 def is_code_text(text):
     import re
-    # Elimina espacios y caracteres no alfanuméricos
     clean = re.sub(r'[^A-Za-z0-9]', '', text)
-    # Busca una letra y 10 dígitos, o solo 10-11 dígitos
-    match = re.search(r'([A-Za-z][0-9]{10})|([0-9]{10,11})', clean)
-    if match:
-        code = match.group(0)
-        # Si solo hay dígitos, puedes asumir que la letra inicial es 'c'
-        if re.fullmatch(r'[0-9]{10,11}', code):
-            code = 'c' + code[-10:]  # Toma los últimos 10 dígitos y antepone 'c'
-        return code
+    # Anillos: C/c seguido de 9 dígitos
+    if re.match(r'^[Cc][0-9]{9}$', clean):
+        return clean
+    # Pulseras: TTS seguido de cualquier combinación de letras y dígitos
+    if re.match(r'^TTS[A-Za-z0-9]+$', clean, re.IGNORECASE):
+        return clean
+    # Pulseras: solo 9 dígitos
+    if re.match(r'^[0-9]{9}$', clean):
+        return clean
+    # Anillos: solo 8 dígitos (nuevo filtro)
+    if re.match(r'^[0-9]{8}$', clean):
+        return clean
     return None
 
-def classify_and_save_rectangles(input_dir, codes_dir, images_dir):
+def preprocess_for_ocr(img):
+    # Aumentar tamaño
+    img = cv2.resize(img, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # Invertir si el texto es oscuro sobre fondo claro
+    if np.mean(gray) > 127:
+        gray = 255 - gray
+    gray = cv2.equalizeHist(gray)
+    _, thresh = cv2.threshold(gray, 120, 255, cv2.THRESH_BINARY)
+    thresh = cv2.medianBlur(thresh, 3)
+    return thresh
+
+def classify_and_save_rectangles(input_dir, codes_dir, images_dir, preprocessed_dir=None):
     if not os.path.exists(codes_dir):
         os.makedirs(codes_dir)
     if not os.path.exists(images_dir):
         os.makedirs(images_dir)
+    if preprocessed_dir and not os.path.exists(preprocessed_dir):
+        os.makedirs(preprocessed_dir)
     for fname in os.listdir(input_dir):
         if not fname.endswith('.png'):
             continue
@@ -83,8 +100,15 @@ def classify_and_save_rectangles(input_dir, codes_dir, images_dir):
         img = cv2.imread(img_path)
         if is_mostly_white(img, threshold=0.98):
             continue  # Ignora recortes vacíos
-        text = pytesseract.image_to_string(img).strip()
-        print(f"{fname}: '{text}'")  # Imprime el texto detectado para depuración
+        pre_img = preprocess_for_ocr(img)
+        # Guarda el preprocesado para depuración
+        if preprocessed_dir:
+            cv2.imwrite(os.path.join(preprocessed_dir, fname), pre_img)
+        text = pytesseract.image_to_string(
+            pre_img,
+            config='--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+        ).strip()
+        print(f"{fname}: '{text}'")  # Para depuración
         code = is_code_text(text)
         if code:
             cv2.imwrite(os.path.join(codes_dir, fname), img)
@@ -140,6 +164,14 @@ def pair_and_upload_codes_images(rectangles_dir, mongo_client, db_name='images_d
         i += 1
     print(f"Subidos {len(pairs)} pares código-imagen a MongoDB.")
 
+def get_category_from_code(code):
+    if code and (code[0] == 'C' or code[0] == 'c'):
+        return 'anillos'
+    elif code and (code.isdigit() or code.upper().startswith('TTS')):
+        return 'pulseras'
+    else:
+        return 'desconocido'
+
 def pair_and_upload_codes_images_by_order(codes_dir, images_dir, mongo_client, db_name='images_db', collection_name='codes_images'):
     codes = sorted([f for f in os.listdir(codes_dir) if f.endswith('.png')])
     images = sorted([f for f in os.listdir(images_dir) if f.endswith('.png')])
@@ -153,12 +185,13 @@ def pair_and_upload_codes_images_by_order(codes_dir, images_dir, mongo_client, d
         code_img = cv2.imread(code_img_path)
         code_text = pytesseract.image_to_string(code_img).strip()
         code = is_code_text(code_text)
+        category = get_category_from_code(code)
         with open(image_img_path, 'rb') as fimg:
             img_bytes = fimg.read()
         doc = {
             'code': code,
             'image_bytes': img_bytes,
-            'category': 'anillos'
+            'category': category
         }
         try:
             collection.insert_one(doc)
@@ -179,21 +212,28 @@ def clean_output_dirs(*dirs):
 
 if __name__ == "__main__":
     client = return_mongo_client()
+    clean_output_dirs("rectangles_output", "codes_output", "images_output","preprocessed_output")
     print(client.list_database_names())
-    extract_rectangles(
-        image_path="source_images/3bb60701-86c2-410f-a05b-dc0b353f51bf.jpeg",
-        output_dir="rectangles_output",
-        debug_path="debug_contours.png"
-    )
-    classify_and_save_rectangles(
-        input_dir="rectangles_output",
-        codes_dir="codes_output",
-        images_dir="images_output"
-    )
-    pair_and_upload_codes_images_by_order(
-        codes_dir="codes_output",
-        images_dir="images_output",
-        mongo_client=client
-    )
-    # Limpiar y eliminar directorios tras la subida
-    clean_output_dirs("rectangles_output", "codes_output", "images_output")
+    source_dir = "source_images"
+    for fname in os.listdir(source_dir):
+        if not fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+            continue
+        image_path = os.path.join(source_dir, fname)
+        print(f"Procesando {image_path}")
+        extract_rectangles(
+            image_path=image_path,
+            output_dir="rectangles_output",
+            debug_path="debug_contours.png"
+        )
+        classify_and_save_rectangles(
+            input_dir="rectangles_output",
+            codes_dir="codes_output",
+            images_dir="images_output",
+            preprocessed_dir="preprocessed_output"
+        )
+        pair_and_upload_codes_images_by_order(
+            codes_dir="codes_output",
+            images_dir="images_output",
+            mongo_client=client
+        )
+        clean_output_dirs("rectangles_output", "codes_output", "images_output", "preprocessed_output")
