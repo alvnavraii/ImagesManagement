@@ -173,10 +173,13 @@ def clean_output_dirs(*dirs):
                 fp = os.path.join(d, f)
                 if os.path.isfile(fp):
                     os.remove(fp)
+            # Elimina el directorio si está vacío
+            if not os.listdir(d):
+                os.rmdir(d)
 
 if __name__ == "__main__":
     client = return_mongo_client()
-    
+    print(client.list_database_names())
     extract_rectangles(
         image_path="source_images/3bb60701-86c2-410f-a05b-dc0b353f51bf.jpeg",
         output_dir="rectangles_output",
@@ -192,5 +195,5 @@ if __name__ == "__main__":
         images_dir="images_output",
         mongo_client=client
     )
-    # Limpiar directorios tras la subida
+    # Limpiar y eliminar directorios tras la subida
     clean_output_dirs("rectangles_output", "codes_output", "images_output")
