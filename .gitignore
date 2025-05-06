@@ -1,0 +1,31 @@
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Environment files
+.env
+.venv/
+*.env
+*.venv
+
+# VSCode settings
+.vscode/
+
+# Output folders
+rectangles_output/
+codes_output/
+images_output/
+debug_contours.png
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Docker
+*.pid
+
+# Logs
+*.log
