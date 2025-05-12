@@ -5,6 +5,10 @@ import numpy as np
 from connect_mongodb import return_mongo_client
 from pymongo.errors import DuplicateKeyError
 import shutil
+from fix_black_boxes import fill_black_boxes_with_white
+import json
+import datetime
+import time
 
 def extract_rectangles(image_path, output_dir, debug_path=None):
     image = cv2.imread(image_path)
@@ -59,19 +63,24 @@ def is_mostly_white(img, threshold=0.98):
 
 def is_code_text(text):
     import re
-    clean = re.sub(r'[^A-Za-z0-9]', '', text)
-    # Anillos: C/c seguido de 9 dígitos
-    if re.match(r'^[Cc][0-9]{9}$', clean):
-        return clean
+    # No eliminar la 'C' o 'c' inicial ni otros caracteres relevantes
+    clean = text.replace('\n', '').replace(' ', '')
+    # Anillos: C/c seguido de 8-12 dígitos
+    match = re.search(r'([Cc][0-9]{8,12})', clean)
+    if match:
+        return match.group(1)
     # Pulseras: TTS seguido de cualquier combinación de letras y dígitos
-    if re.match(r'^TTS[A-Za-z0-9]+$', clean, re.IGNORECASE):
-        return clean
-    # Pulseras: solo 9 dígitos
-    if re.match(r'^[0-9]{9}$', clean):
-        return clean
-    # Anillos: solo 8 dígitos (nuevo filtro)
-    if re.match(r'^[0-9]{8}$', clean):
-        return clean
+    match = re.search(r'(TTS[A-Za-z0-9]+)', clean, re.IGNORECASE)
+    if match:
+        return match.group(1)
+    # Pulseras: solo 10-12 dígitos
+    match = re.search(r'([0-9]{10,12})', clean)
+    if match:
+        return match.group(1)
+    # Anillos: solo 8-9 dígitos
+    match = re.search(r'([0-9]{8,9})', clean)
+    if match:
+        return match.group(1)
     return None
 
 def preprocess_for_ocr(img):
@@ -86,7 +95,7 @@ def preprocess_for_ocr(img):
     thresh = cv2.medianBlur(thresh, 3)
     return thresh
 
-def classify_and_save_rectangles(input_dir, codes_dir, images_dir, preprocessed_dir=None):
+def classify_and_save_rectangles(input_dir, codes_dir, images_dir, code_map, preprocessed_dir=None, image_id=None):
     if not os.path.exists(codes_dir):
         os.makedirs(codes_dir)
     if not os.path.exists(images_dir):
@@ -108,12 +117,21 @@ def classify_and_save_rectangles(input_dir, codes_dir, images_dir, preprocessed_
             pre_img,
             config='--psm 6 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
         ).strip()
+        text = text.replace('\n', '').replace(' ', '')
         print(f"{fname}: '{text}'")  # Para depuración
         code = is_code_text(text)
         if code:
+            # Evitar códigos duplicados en el diccionario (solo guardar el primero)
+            if code in code_map.values():
+                continue
+            img = fill_black_boxes_with_white(img)
             cv2.imwrite(os.path.join(codes_dir, fname), img)
-        elif not is_mostly_white(img, threshold=0.90):  # Más estricto para imágenes
+            unique_key = f"{image_id}_{fname}" if image_id else fname
+            code_map[unique_key] = code
+        elif not is_mostly_white(img, threshold=0.90):
+            img = fill_black_boxes_with_white(img)
             cv2.imwrite(os.path.join(images_dir, fname), img)
+    return code_map
 
 def pair_and_upload_codes_images(rectangles_dir, mongo_client, db_name='images_db', collection_name='codes_images'):
     import re
@@ -165,39 +183,75 @@ def pair_and_upload_codes_images(rectangles_dir, mongo_client, db_name='images_d
     print(f"Subidos {len(pairs)} pares código-imagen a MongoDB.")
 
 def get_category_from_code(code):
-    if code and (code[0] == 'C' or code[0] == 'c'):
-        return 'anillos'
-    elif code and (code.isdigit() or code.upper().startswith('TTS')):
-        return 'pulseras'
-    else:
-        return 'desconocido'
+    # Todos los recortes se consideran anillos
+    return 'anillos'
 
-def pair_and_upload_codes_images_by_order(codes_dir, images_dir, mongo_client, db_name='images_db', collection_name='codes_images'):
-    codes = sorted([f for f in os.listdir(codes_dir) if f.endswith('.png')])
-    images = sorted([f for f in os.listdir(images_dir) if f.endswith('.png')])
-    n = min(len(codes), len(images))
+def pair_and_upload_codes_images_by_order(
+    codes_dir, images_dir, mongo_client, code_map,
+    db_name='images_db', collection_name='codes_images'
+):
+    import re
+    def extract_number(fname):
+        m = re.search(r'rect_(\d+)\.png', fname)
+        return int(m.group(1)) if m else -1
+
+    codes = [f for f in os.listdir(codes_dir) if f.endswith('.png')]
+    images = [f for f in os.listdir(images_dir) if f.endswith('.png')]
+    codes = sorted(codes, key=extract_number)
+    images = sorted(images, key=extract_number)
+
     collection = mongo_client[db_name][collection_name]
-    # Crear índice único en 'code'
     collection.create_index('code', unique=True)
+
+    n = max(len(codes), len(images))
     for i in range(n):
-        code_img_path = os.path.join(codes_dir, codes[i])
-        image_img_path = os.path.join(images_dir, images[i])
-        code_img = cv2.imread(code_img_path)
-        code_text = pytesseract.image_to_string(code_img).strip()
-        code = is_code_text(code_text)
-        category = get_category_from_code(code)
-        with open(image_img_path, 'rb') as fimg:
-            img_bytes = fimg.read()
+        code = None
+        code_key = None
+        code_fname = codes[i] if i < len(codes) else None
+        image_fname = images[i] if i < len(images) else None
+
+        if code_fname:
+            for key in code_map:
+                if key.endswith('_' + code_fname):
+                    code_key = key
+                    break
+            if code_key:
+                code = code_map[code_key]
+
+        # Leer imagen si existe
+        img_bytes = None
+        if image_fname:
+            image_img_path = os.path.join(images_dir, image_fname)
+            with open(image_img_path, 'rb') as fimg:
+                img_bytes = fimg.read()
+
+        # Lógica de categoría y código
+        if code and img_bytes:
+            category = 'anillos'
+            code_value = code
+        else:
+            category = 'Pendiente de Validar'
+            code_value = code if code else f"no_code_{i}"
+
+        now = datetime.datetime.utcnow()
         doc = {
-            'code': code,
+            'code': code_value,
             'image_bytes': img_bytes,
-            'category': category
+            'category': category,
+            'updated_at': now
         }
-        try:
-            collection.insert_one(doc)
-        except DuplicateKeyError:
-            print(f"Error: El código '{code}' ya existe en la base de datos. No se ha insertado el duplicado.")
-    print(f"Subidos {n} pares código-imagen a MongoDB por orden (sin duplicados).")
+        # Usar $setOnInsert para la fecha de creación
+        result = collection.update_one(
+            {'code': doc['code']},
+            {'$set': {'image_bytes': img_bytes, 'category': category, 'updated_at': now},
+             '$setOnInsert': {'created_at': now}},
+            upsert=True
+        )
+        if result.matched_count > 0:
+            print(f"Actualizado: El código '{doc['code']}' ya existía. Fecha de actualización modificada.")
+        elif result.upserted_id is not None:
+            print(f"Insertado: Nuevo código '{doc['code']}' subido.")
+    print(f"Subidos/actualizados {n} registros a MongoDB (anillos o pendientes de validar).")
 
 def clean_output_dirs(*dirs):
     for d in dirs:
@@ -212,12 +266,18 @@ def clean_output_dirs(*dirs):
 
 if __name__ == "__main__":
     client = return_mongo_client()
+    """ client['images_db']['codes_images'].drop() """
     clean_output_dirs("rectangles_output", "codes_output", "images_output","preprocessed_output")
     print(client.list_database_names())
     source_dir = "source_images"
+    images_old_dir = "images_old"
+    if not os.path.exists(images_old_dir):
+        os.makedirs(images_old_dir)
     for fname in os.listdir(source_dir):
-        if not fname.lower().endswith(('.png', '.jpg', '.jpeg')):
+        if not fname.lower().endswith((".png", ".jpg", ".jpeg")):
             continue
+        start_time = time.time()
+        global_code_map = {}  # Limpia el diccionario aquí
         image_path = os.path.join(source_dir, fname)
         print(f"Procesando {image_path}")
         extract_rectangles(
@@ -229,11 +289,18 @@ if __name__ == "__main__":
             input_dir="rectangles_output",
             codes_dir="codes_output",
             images_dir="images_output",
-            preprocessed_dir="preprocessed_output"
+            code_map=global_code_map,
+            preprocessed_dir="preprocessed_output",
+            image_id=os.path.splitext(fname)[0]
         )
         pair_and_upload_codes_images_by_order(
             codes_dir="codes_output",
             images_dir="images_output",
-            mongo_client=client
+            mongo_client=client,
+            code_map=global_code_map
         )
-        clean_output_dirs("rectangles_output", "codes_output", "images_output", "preprocessed_output")
+        # Mover la imagen procesada a images_old
+        #shutil.move(image_path, os.path.join(images_old_dir, fname))
+        elapsed = time.time() - start_time
+        print(f"Tiempo de procesamiento para {fname}: {elapsed:.2f} segundos")
+        """ clean_output_dirs("rectangles_output", "codes_output", "images_output", "preprocessed_output") """

@@ -11,6 +11,12 @@ services:
       MONGO_INITDB_ROOT_PASSWORD: PwdLota5971!
     volumes:
       - mongo_data:/data/db
+    networks:
+      - catalog-net
 
 volumes:
   mongo_data:
+
+networks:
+  catalog-net:
+    driver: bridge
