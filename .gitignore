@@ -1,33 +1,37 @@
-# Byte-compiled / cache files
+# Ignorar todo para comenzar
+*
+
+# Permitir archivos en la raíz del proyecto
+!/*.py
+!/*.yml
+!/*.yaml
+!/*.md
+!/*.txt
+!/.gitignore
+
+# Ignorar específicamente estos archivos y carpetas
 __pycache__/
 *.py[cod]
-
-# Jupyter Notebook checkpoints
 .ipynb_checkpoints/
-
-# Environment files
 .env
 .venv/
 *.env
 *.venv
-
-# VSCode settings
+.ImagesManagement/
 .vscode/
-
-# Output folders
 rectangles_output/
 codes_output/
 images_output/
 debug_contours.png
 source/
+source_images/
 images_old/
-
-# System files
 .DS_Store
 Thumbs.db
-
-# Docker
 *.pid
-
-# Logs
 *.log
+*.h5
+
+# Ignorar todas las subcarpetas
+*/
+
