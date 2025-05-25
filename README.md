@@ -3,7 +3,7 @@
 ![Python](https://img.shields.io/badge/python-3.8+-blue.svg)
 ![OpenCV](https://img.shields.io/badge/OpenCV-4.x-green.svg)
 ![MongoDB](https://img.shields.io/badge/MongoDB-4.x+-green.svg)
-![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![License](https://img.shields.io/badge/license-GPL%20v3-blue.svg)
 
 Sistema automatizado para el procesamiento, clasificación y almacenamiento de imágenes de productos de joyería. Utiliza técnicas de visión por computadora, OCR y machine learning para extraer códigos de producto e imágenes de catálogos escaneados.
 
@@ -291,7 +291,7 @@ git commit -m "refactor: limpieza código"
 
 ## 📄 **Licencia**
 
-Este proyecto está bajo la Licencia MIT. Ver `LICENSE` para más detalles.
+Este proyecto está bajo la Licencia GPL. Ver `LICENSE` para más detalles.
 
 ## 👥 **Autores**
 
