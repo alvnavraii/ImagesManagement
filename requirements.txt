@@ -11,6 +11,10 @@ pymongo>=4.4.0
 # Variables de entorno (si usas .env)
 python-dotenv>=1.0.0
 
+# Web framework
+Flask>=2.3.0
+Werkzeug>=2.3.0
+
 # Dependencias ML (solo agregar si realmente las usas)
 # scikit-learn>=1.3.0
 # pandas>=2.0.0

@@ -488,10 +488,6 @@ def process_rectangles_improved(input_dir, codes_dir, images_dir, discards_dir):
     else:
         diff = abs(text_count - image_count)
         print(f"\n⚖️ BALANCE: {text_count} códigos vs {image_count} imágenes (diferencia: {diff})")
-        opcion = input("Pulse enter para continuar o 'q' para salir: ")
-        if opcion.lower() == 'q':
-            print("👋 Saliendo del programa.")
-            sys.exit(0)
     print(f"\n📁 Archivos guardados en:")
     print(f"  📝 Códigos: {codes_dir}")
     print(f"  🖼️ Imágenes: {images_dir}")
