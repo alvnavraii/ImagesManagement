@@ -25,7 +25,7 @@ def pair_and_upload_codes_images_by_order(
 ):
     """
     Empareja códigos e imágenes basándose en los nombres de archivo y los sube a MongoDB.
-    Versión simplificada que asume que codes_dir contiene solo códigos e images_dir solo imágenes.
+    MEJORADO: Incluye detección automática de categorías de joyería.
     
     Args:
         codes_dir: Directorio que contiene las imágenes de códigos
@@ -37,6 +37,7 @@ def pair_and_upload_codes_images_by_order(
     """
     import re
     import pytesseract
+    import json
     
     # Función auxiliar para extraer el número del nombre del archivo
     def extract_number(fname):
@@ -88,17 +89,11 @@ def pair_and_upload_codes_images_by_order(
             
         print(f"Código extraído: '{code_text}' de {code_file}")
         
-        # Determinar la categoría basada en el código
-        category = 'pendientes'  # Por defecto es colgantes
-        """ if code_text.isdigit() and len(code_text) == 10:
-            category = 'colgantes'  # Códigos de 10 dígitos son colgantes
-        else:
-            # Verificar si proviene de una fuente conocida de colgantes
-            if image_id and image_id.startswith(('db728dce', 'f0c54273')):
-                category = 'colgantes'
-            else:
-                category = 'anillos'  # Por defecto es anillos
-         """
+        # NUEVO: Determinar la categoría usando la detección automática de joyería
+        category = 'sin_categoria'  # Por defecto
+        category_confidence = 0.0
+        category_features = {}
+        
         # Buscar la imagen correspondiente por número de rectángulo
         rect_num = extract_number(code_file)
         matching_image = None
@@ -118,6 +113,29 @@ def pair_and_upload_codes_images_by_order(
             print(f"No se encontró ninguna imagen disponible para emparejar con {code_file}, omitiendo...")
             continue
         
+        # NUEVO: Obtener categoría de joyería desde archivo JSON si está disponible
+        if matching_image:
+            base_name = os.path.splitext(matching_image)[0]
+            category_json_path = os.path.join(images_dir, f"{base_name}_category.json")
+            
+            if os.path.exists(category_json_path):
+                try:
+                    with open(category_json_path, 'r', encoding='utf-8') as f:
+                        category_data = json.load(f)
+                    
+                    category = category_data.get('category', 'sin_categoria')
+                    category_confidence = category_data.get('confidence', 0.0)
+                    category_features = category_data.get('features', {})
+                    
+                    print(f"  🏷️ Categoría detectada: {category_data.get('category_display', category)} (confianza: {category_confidence:.2f})")
+                    
+                except Exception as e:
+                    print(f"  ⚠️ Error leyendo categoría para {matching_image}: {e}")
+                    category = 'pendientes'  # Fallback
+            else:
+                print(f"  ⚠️ No se encontró información de categoría para {matching_image}, usando 'pendientes' por defecto")
+                category = 'pendientes'  # Fallback
+        
         # Si tenemos una imagen para este código
         img_bytes = None
         if matching_image:
@@ -132,16 +150,28 @@ def pair_and_upload_codes_images_by_order(
         tz = pytz.timezone('Europe/Madrid')
         now = datetime.datetime.now(tz).replace(tzinfo=None)
         
-        # Preparar documento para insertar/actualizar
+        # Preparar documento para insertar/actualizar CON INFORMACIÓN DE CATEGORÍAS
         doc = {
             'code': code_text,
             'category': category,
             'updated_at': now
         }
         
+        # NUEVO: Añadir información completa de categorías de joyería
+        if category != 'sin_categoria':
+            doc.update({
+                'jewelry_category': category,
+                'jewelry_confidence': category_confidence,
+                'jewelry_features': category_features,
+                'auto_categorized': True,
+                'category_detected_at': now
+            })
+        
         # Añadir la imagen solo si la tenemos
         if img_bytes:
             doc['image_bytes'] = img_bytes
+            # También agregar metadatos de la imagen
+            doc['image_filename'] = matching_image if matching_image else None
         
         # Insertar o actualizar en MongoDB
         result = collection.update_one(
@@ -153,12 +183,14 @@ def pair_and_upload_codes_images_by_order(
             upsert=True
         )
         
-        # Registrar resultado
+        # Registrar resultado con información de categorías
         if result.matched_count > 0:
-            print(f"Actualizado: Código '{code_text}' ({category})")
+            category_info = f" [{category}]" if category != 'sin_categoria' else ""
+            print(f"Actualizado: Código '{code_text}'{category_info}")
             updated_count += 1
         elif result.upserted_id is not None:
-            print(f"Insertado: Nuevo código '{code_text}' ({category})")
+            category_info = f" [{category}]" if category != 'sin_categoria' else ""
+            print(f"Insertado: Nuevo código '{code_text}'{category_info}")
             inserted_count += 1
     
     print(f"\nProceso completado:")

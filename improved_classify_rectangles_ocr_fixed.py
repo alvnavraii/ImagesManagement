@@ -14,6 +14,7 @@ import sys
 import re
 from datetime import datetime
 from MachineLearning.classify_image import ImageCategoryClassifier
+from MachineLearning.jewelry_category_detector import JewelryCategoryDetector
 
 def clean_output_directories(codes_dir, images_dir, discards_dir):
     """Limpia las carpetas de salida para comenzar desde cero."""
@@ -272,7 +273,7 @@ def is_measurements_or_weight_only_enhanced(text: str) -> dict:
 
 def enhanced_rectangle_analysis(image_path: str) -> dict:
     """
-    Análisis mejorado que combina OCR + detección de medidas/pesos + análisis visual
+    Análisis mejorado que combine OCR + detección de medidas/pesos + análisis visual + categorías de joyería
     """
     result = {
         'image_path': image_path,
@@ -280,7 +281,10 @@ def enhanced_rectangle_analysis(image_path: str) -> dict:
         'discard_reason': None,
         'category': None,
         'confidence': 0.0,
-        'analysis_steps': []
+        'analysis_steps': [],
+        'jewelry_category': None,
+        'jewelry_confidence': 0.0,
+        'jewelry_features': {}
     }
     
     print(f"🔍 Analizando: {os.path.basename(image_path)}")
@@ -341,6 +345,30 @@ def enhanced_rectangle_analysis(image_path: str) -> dict:
     else:
         result['category'] = 'image'  # Sin texto = imagen
         print(f"  🖼️ Clasificado como IMAGEN (sin texto)")
+    
+    # Paso 4: NUEVO - Detectar categoría de joyería para imágenes
+    if result['category'] == 'image':
+        result['analysis_steps'].append('jewelry_category_detection')
+        try:
+            detector = JewelryCategoryDetector()
+            jewelry_result = detector.detect_category(
+                image_path=image_path,
+                extracted_text=extracted_text,
+                filename=os.path.basename(image_path)
+            )
+            
+            # Actualizar resultado con información de joyería
+            result['jewelry_category'] = jewelry_result.get('category', 'sin_categoria')
+            result['jewelry_confidence'] = jewelry_result.get('confidence', 0.0)
+            result['jewelry_features'] = jewelry_result.get('features', {})
+            result['jewelry_analysis'] = jewelry_result
+            
+            print(f"  🏷️ Categoría de joyería: {result['jewelry_category']} (confianza: {result['jewelry_confidence']:.2f})")
+            
+        except Exception as e:
+            print(f"  ⚠️ Error en detección de categoría de joyería: {e}")
+            result['jewelry_category'] = 'pendientes'  # Fallback
+            result['jewelry_confidence'] = 0.3
     
     result['confidence'] = 0.8
     print(f"  ✅ VÁLIDO - Categoría final: {result['category']}")
@@ -454,6 +482,19 @@ def process_rectangles_improved(input_dir, codes_dir, images_dir, discards_dir):
             shutil.copy2(image_path, destination)
             image_count += 1
             print(f"  🖼️ → IMAGEN guardada en: {destination}")
+            
+            # NUEVO: Guardar información de categoría de joyería si está disponible
+            if analysis.get('jewelry_category') and analysis['jewelry_category'] != 'sin_categoria':
+                try:
+                    detector = JewelryCategoryDetector()
+                    category_json_path = detector.save_category_json(
+                        result=analysis['jewelry_analysis'],
+                        output_dir=images_dir
+                    )
+                    if category_json_path:
+                        print(f"  🏷️ → Categoría guardada en: {category_json_path}")
+                except Exception as e:
+                    print(f"  ⚠️ Error guardando categoría: {e}")
         
         else:
             # Caso inesperado - descartar por seguridad
